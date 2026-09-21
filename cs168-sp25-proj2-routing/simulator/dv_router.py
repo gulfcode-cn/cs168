@@ -144,7 +144,12 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stages 4, 10 #####
-
+        if route_dst not in self.table or self.table[route_dst].port == port or self.table[route_dst].latency > route_latency + self.ports.get_latency(port=port): 
+            self.table[route_dst] = TableEntry(dst=route_dst,
+                                                port=port,
+                                                latency=route_latency + 
+                                                self.ports.get_latency(port=port),
+                                                expire_time=api.current_time() + self.ROUTE_TTL)
         ##### End Stages 4, 10 #####
 
     def handle_link_up(self, port, latency):
