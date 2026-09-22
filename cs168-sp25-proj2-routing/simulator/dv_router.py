@@ -117,8 +117,8 @@ class DVRouter(DVRouterBase):
         ##### Begin Stages 3, 6, 7, 8, 10 #####
         if force:
             for p in self.ports.get_all_ports():
-                for host, host_table in self.table.items():
-                    self.send_route(port=p, dst=host, latency=host_table.latency)
+                for host, hostTable in self.table.items():
+                    self.send_route(port=p, dst=host, latency=hostTable.latency)
         if single_port == None:
             return
         ##### End Stages 3, 6, 7, 8, 10 #####
@@ -130,7 +130,13 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stages 5, 9 #####
-
+        expired_hosts = []
+        for host, tableEntry in self.table.items():
+            if tableEntry.expire_time <= api.current_time():
+                expired_hosts.append(host)
+        for expired_host in expired_hosts:
+            self.table.pop(expired_host)
+            self.s_log("router: %s lost link to host: %s for expired time", self.name, host)
         ##### End Stages 5, 9 #####
 
     def handle_route_advertisement(self, route_dst, route_latency, port):
