@@ -196,6 +196,7 @@ class DVRouter(DVRouterBase):
         for host, TableEntry in self.table.items():
             if self.SPLIT_HORIZON and port == TableEntry.port:
                 continue
-            if self.POISON_EXPIRED and port == TableEntry.port:
-                pass
+            elif self.POISON_REVERSE and port == TableEntry.port:
+                self.send_route(port=port, dst=host, latency=INFINITY)
+                continue
             self.send_route(port=port, dst=host, latency=TableEntry.latency)
