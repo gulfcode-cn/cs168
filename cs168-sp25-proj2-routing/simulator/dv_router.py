@@ -117,10 +117,9 @@ class DVRouter(DVRouterBase):
         ##### Begin Stages 3, 6, 7, 8, 10 #####
         if force:
             for p in self.ports.get_all_ports():
-                for host, hostTable in self.table.items():
-                    self.send_route(port=p, dst=host, latency=hostTable.latency)
-        if single_port == None:
-            return
+                self.send_table_To_port(port=p)
+        if not single_port == None:
+            self.send_table_To_port(port=single_port)
         ##### End Stages 3, 6, 7, 8, 10 #####
 
     def expire_routes(self):
@@ -186,3 +185,17 @@ class DVRouter(DVRouterBase):
         ##### End Stage 10B #####
 
     # Feel free to add any helper methods!
+
+    def send_table_To_port(self, port):
+        """
+        Send table of router to port
+
+        :param port: the port number ysed by the link.
+        :returns: nothing.
+        """
+        for host, TableEntry in self.table.items():
+            if self.SPLIT_HORIZON and port == TableEntry.port:
+                continue
+            if self.POISON_EXPIRED and port == TableEntry.port:
+                pass
+            self.send_route(port=port, dst=host, latency=TableEntry.latency)
