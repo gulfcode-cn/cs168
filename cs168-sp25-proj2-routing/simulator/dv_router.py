@@ -134,7 +134,7 @@ class DVRouter(DVRouterBase):
             if tableEntry.expire_time <= api.current_time():
                 expired_hosts.append(host)
         for expired_host in expired_hosts:
-            if self.POISON_EXPIRED:
+            if self.POISON_EXPIRED and self.table[expired_host].latency != INFINITY:
                 old_port = self.table[expired_host].port
                 self.table[expired_host] = TableEntry(dst=expired_host,
                                                         port=old_port,
