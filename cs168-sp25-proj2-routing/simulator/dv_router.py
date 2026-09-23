@@ -199,4 +199,4 @@ class DVRouter(DVRouterBase):
             elif self.POISON_REVERSE and port == TableEntry.port:
                 self.send_route(port=port, dst=host, latency=INFINITY)
                 continue
-            self.send_route(port=port, dst=host, latency=TableEntry.latency)
+            self.send_route(port=port, dst=host, latency=min(TableEntry.latency, INFINITY))
