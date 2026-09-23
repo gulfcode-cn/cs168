@@ -134,8 +134,15 @@ class DVRouter(DVRouterBase):
             if tableEntry.expire_time <= api.current_time():
                 expired_hosts.append(host)
         for expired_host in expired_hosts:
-            self.table.pop(expired_host)
-            self.s_log("router: %s lost link to host: %s for expired time", self.name, host)
+            if self.POISON_EXPIRED:
+                old_port = self.table[expired_host].port
+                self.table[expired_host] = TableEntry(dst=expired_host,
+                                                        port=old_port,
+                                                        latency=INFINITY,
+                                                        expire_time=api.current_time() + self.ROUTE_TTL)
+            else:
+                self.table.pop(expired_host)
+            self.s_log("router: %s lost link to host: %s for expired time", self.name, expired_host)
         ##### End Stages 5, 9 #####
 
     def handle_route_advertisement(self, route_dst, route_latency, port):
