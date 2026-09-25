@@ -58,6 +58,15 @@ class DVRouter(DVRouterBase):
         self.table.owner = self
 
         ##### Begin Stage 10A #####
+        """
+        history: {
+            "port": {
+                "host_1": latency01
+                "host_2": latency02
+            }
+        }
+        """
+        self.history = {}  # record last advertisement to every port and lantency
 
         ##### End Stage 10A #####
 
@@ -115,11 +124,11 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stages 3, 6, 7, 8, 10 #####
-        if force:
-            for p in self.ports.get_all_ports():
-                self.send_table_To_port(port=p)
-        if not single_port == None:
-            self.send_table_To_port(port=single_port)
+        ports = self.ports.get_all_ports()
+        if single_port != None:
+            ports = [single_port]
+        for p in ports:
+            self.send_table(port=p, force=force)
         ##### End Stages 3, 6, 7, 8, 10 #####
 
     def expire_routes(self):
@@ -162,6 +171,7 @@ class DVRouter(DVRouterBase):
                                                 latency=route_latency + 
                                                 self.ports.get_latency(port=port),
                                                 expire_time=api.current_time() + self.ROUTE_TTL)
+            self.send_routes(force=False)
         ##### End Stages 4, 10 #####
 
     def handle_link_up(self, port, latency):
@@ -193,17 +203,39 @@ class DVRouter(DVRouterBase):
 
     # Feel free to add any helper methods!
 
-    def send_table_To_port(self, port):
+    def send_table(self, port, force):
         """
-        Send table of router to port
+        Send route advertisements for all routes in the table out of one port.
 
-        :param port: the port number ysed by the link.
-        :returns: nothing.
+        :param port: the port to advertise out of.
+        :param force: if True, advertises ALL routes in the table;
+                      otherwise, advertises only those routes that have
+                      changed since the last advertisement to this port.
+        :return: nothing.
         """
         for host, TableEntry in self.table.items():
-            if self.SPLIT_HORIZON and port == TableEntry.port:
+            send_latency = INFINITY if port == TableEntry.port and self.POISON_REVERSE else min(TableEntry.latency, INFINITY)
+            if (not force and
+                port in self.history and
+                host in self.history[port] and
+                self.history[port][host] == send_latency):
                 continue
-            elif self.POISON_REVERSE and port == TableEntry.port:
-                self.send_route(port=port, dst=host, latency=INFINITY)
-                continue
-            self.send_route(port=port, dst=host, latency=min(TableEntry.latency, INFINITY))
+            if port == TableEntry.port:
+                if self.SPLIT_HORIZON:
+                    continue
+            self.send_route(port=port, dst=host, latency=send_latency)
+            self.add_history(port=port, host=host, latency=send_latency)
+            
+    def add_history(self, port, host, latency):
+        """
+        Record the most recent advertisement sent out of a port for a
+        destination.
+
+        :param port: the port the advertisement was sent out of.
+        :param host: the destination of the advertised route.
+        :param latency: the latency that was actually advertised.
+        :return: nothing.
+        """
+        Entry = {} if self.history.get(port) == None else self.history[port]
+        Entry[host] = latency
+        self.history[port] = Entry
