@@ -58,6 +58,15 @@ class DVRouter(DVRouterBase):
         self.table.owner = self
 
         ##### Begin Stage 10A #####
+        """
+        history: {
+            "port": {
+                "host_1": latency01
+                "host_2": latency02
+            }
+        }
+        """
+        self.history = {}  # record last advertisement to every port and lantency
 
         ##### End Stage 10A #####
 
@@ -77,7 +86,10 @@ class DVRouter(DVRouterBase):
         assert port in self.ports.get_all_ports(), "Link should be up, but is not."
 
         ##### Begin Stage 1 #####
-
+        self.table[host] = TableEntry(dst=host,
+                                        port=port,
+                                        latency=self.ports.get_latency(port=port),
+                                        expire_time=FOREVER)
         ##### End Stage 1 #####
 
     def handle_data_packet(self, packet, in_port):
@@ -92,7 +104,11 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stage 2 #####
-
+        if not packet.dst in self.table:
+            return
+        if self.table[packet.dst].latency >= INFINITY:
+            return
+        self.send(packet=packet, port=self.table[packet.dst].port)
         ##### End Stage 2 #####
 
     def send_routes(self, force=False, single_port=None):
@@ -108,7 +124,11 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stages 3, 6, 7, 8, 10 #####
-
+        ports = self.ports.get_all_ports()
+        if single_port != None:
+            ports = [single_port]
+        for p in ports:
+            self.send_table(port=p, force=force)
         ##### End Stages 3, 6, 7, 8, 10 #####
 
     def expire_routes(self):
@@ -118,7 +138,20 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stages 5, 9 #####
-
+        expired_hosts = []
+        for host, tableEntry in self.table.items():
+            if tableEntry.expire_time <= api.current_time():
+                expired_hosts.append(host)
+        for expired_host in expired_hosts:
+            if self.POISON_EXPIRED and self.table[expired_host].latency != INFINITY:
+                old_port = self.table[expired_host].port
+                self.table[expired_host] = TableEntry(dst=expired_host,
+                                                        port=old_port,
+                                                        latency=INFINITY,
+                                                        expire_time=api.current_time() + self.ROUTE_TTL)
+            else:
+                self.table.pop(expired_host)
+            self.s_log("router: %s lost link to host: %s for expired time", self.name, expired_host)
         ##### End Stages 5, 9 #####
 
     def handle_route_advertisement(self, route_dst, route_latency, port):
@@ -132,7 +165,13 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stages 4, 10 #####
-
+        if route_dst not in self.table or self.table[route_dst].port == port or self.table[route_dst].latency > route_latency + self.ports.get_latency(port=port): 
+            self.table[route_dst] = TableEntry(dst=route_dst,
+                                                port=port,
+                                                latency=route_latency + 
+                                                self.ports.get_latency(port=port),
+                                                expire_time=api.current_time() + self.ROUTE_TTL)
+            self.send_routes(force=False)
         ##### End Stages 4, 10 #####
 
     def handle_link_up(self, port, latency):
@@ -146,7 +185,8 @@ class DVRouter(DVRouterBase):
         self.ports.add_port(port, latency)
 
         ##### Begin Stage 10B #####
-
+        if self.SEND_ON_LINK_UP:
+            self.send_routes(single_port=port)
         ##### End Stage 10B #####
 
     def handle_link_down(self, port):
@@ -159,7 +199,57 @@ class DVRouter(DVRouterBase):
         self.ports.remove_port(port)
 
         ##### Begin Stage 10B #####
+        link_down_hosts = []
+        for host, hostEntry in self.table.items():
+            if port == hostEntry.port:
+                link_down_hosts.append(host)
+        for host in link_down_hosts:
+            if self.POISON_ON_LINK_DOWN:
+                self.table[host] = TableEntry(dst=host,
+                                              port=port,
+                                              latency=INFINITY,
+                                              expire_time=api.current_time() + self.ROUTE_TTL)
+                self.send_routes()
+            else:
+                self.table.pop(host)
 
         ##### End Stage 10B #####
 
     # Feel free to add any helper methods!
+
+    def send_table(self, port, force):
+        """
+        Send route advertisements for all routes in the table out of one port.
+
+        :param port: the port to advertise out of.
+        :param force: if True, advertises ALL routes in the table;
+                      otherwise, advertises only those routes that have
+                      changed since the last advertisement to this port.
+        :return: nothing.
+        """
+        for host, TableEntry in self.table.items():
+            send_latency = INFINITY if self.POISON_REVERSE and  port == TableEntry.port else min(TableEntry.latency, INFINITY)
+            if (not force and
+                port in self.history and
+                host in self.history[port] and
+                self.history[port][host] == send_latency):
+                continue
+            if port == TableEntry.port:
+                if self.SPLIT_HORIZON:
+                    continue
+            self.send_route(port=port, dst=host, latency=send_latency)
+            self.add_history(port=port, host=host, latency=send_latency)
+            
+    def add_history(self, port, host, latency):
+        """
+        Record the most recent advertisement sent out of a port for a
+        destination.
+
+        :param port: the port the advertisement was sent out of.
+        :param host: the destination of the advertised route.
+        :param latency: the latency that was actually advertised.
+        :return: nothing.
+        """
+        Entry = {} if self.history.get(port) == None else self.history[port]
+        Entry[host] = latency
+        self.history[port] = Entry
