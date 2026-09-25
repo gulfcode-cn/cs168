@@ -185,7 +185,8 @@ class DVRouter(DVRouterBase):
         self.ports.add_port(port, latency)
 
         ##### Begin Stage 10B #####
-
+        if self.SEND_ON_LINK_UP:
+            self.send_routes(single_port=port)
         ##### End Stage 10B #####
 
     def handle_link_down(self, port):
@@ -198,6 +199,19 @@ class DVRouter(DVRouterBase):
         self.ports.remove_port(port)
 
         ##### Begin Stage 10B #####
+        link_down_hosts = []
+        for host, hostEntry in self.table.items():
+            if port == hostEntry.port:
+                link_down_hosts.append(host)
+        for host in link_down_hosts:
+            if self.POISON_ON_LINK_DOWN:
+                self.table[host] = TableEntry(dst=host,
+                                              port=port,
+                                              latency=INFINITY,
+                                              expire_time=api.current_time() + self.ROUTE_TTL)
+                self.send_routes()
+            else:
+                self.table.pop(host)
 
         ##### End Stage 10B #####
 
@@ -214,7 +228,7 @@ class DVRouter(DVRouterBase):
         :return: nothing.
         """
         for host, TableEntry in self.table.items():
-            send_latency = INFINITY if port == TableEntry.port and self.POISON_REVERSE else min(TableEntry.latency, INFINITY)
+            send_latency = INFINITY if self.POISON_REVERSE and  port == TableEntry.port else min(TableEntry.latency, INFINITY)
             if (not force and
                 port in self.history and
                 host in self.history[port] and
