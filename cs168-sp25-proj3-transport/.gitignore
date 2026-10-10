@@ -1,0 +1,3 @@
+# Autograder-generated packet captures and per-test traces
+*.pcap
+trace/
