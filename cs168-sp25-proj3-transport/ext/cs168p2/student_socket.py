@@ -478,6 +478,7 @@ class StudentUSocket(StudentUSocketBase):
       self._delete_tcb()
     elif self.state is ESTABLISHED:
       ## Start of Stage 7.1 ##
+      self.fin_ctrl.set_pending(next_state=FIN_WAIT_1)
 
       ## End of Stage 7.1 ##
       pass
@@ -628,7 +629,8 @@ class StudentUSocket(StudentUSocketBase):
       smallest_seq_num, smallest_seq_packet = self.rx_queue.pop()
       data = smallest_seq_packet.app[self.rcv.nxt |MINUS| smallest_seq_num:]
       self.handle_accepted_seg(seg=smallest_seq_packet.tcp, payload=data)
-    self.set_pending_ack()
+    if payload:
+      self.set_pending_ack()
 
     ## End of Stage 3.2 ##
 
@@ -775,6 +777,18 @@ class StudentUSocket(StudentUSocketBase):
 
 
     ## Start of Stage 7.2 ##
+    if seg.FIN:
+      if self.state == FIN_WAIT_1:
+        if seg.ACK:
+          self.set_pending_ack()
+          self.start_timer_timewait()
+        else:
+          self.set_pending_ack()
+          self.state = CLOSING
+      elif self.state == FIN_WAIT_2:
+        self.rcv.nxt = self.rcv.nxt |PLUS| 1
+        self.set_pending_ack()
+        self.start_timer_timewait()
 
     ## End of Stage 7.2 ##
 
@@ -806,12 +820,14 @@ class StudentUSocket(StudentUSocketBase):
     ## Start of Stage 6.3 ##
     ## Start of Stage 7.3 ##
     if self.state == FIN_WAIT_1:
-      pass
+      if self.fin_ctrl.acks_our_fin(ack=seg.ack):
+        self.state = FIN_WAIT_2
     elif self.state == FIN_WAIT_2:
       if self.retx_queue.empty():
         self.set_pending_ack()
     elif self.state == CLOSING:
-      pass
+      if self.fin_ctrl.acks_our_fin(ack=seg.ack):
+        self.start_timer_timewait()
     elif self.state == LAST_ACK:
       if self.fin_ctrl.acks_our_fin(ack=seg.ack):
         self._delete_tcb()
