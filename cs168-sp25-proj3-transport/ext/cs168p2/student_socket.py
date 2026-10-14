@@ -688,10 +688,19 @@ class StudentUSocket(StudentUSocketBase):
     """
 
     ## Start of Stage 9.1 ##
+    R = self.stack.now - acked_pkt.tx_ts
+    if self.srtt == 0:
+      self.srtt = R
+      self.rttvar = R / 2
+    else:
+      self.rttvar = (1-self.beta) * self.rttvar + self.beta *abs(self.srtt - R)
+      self.srtt = (1-self.alpha) * self.srtt + self.alpha * R
+    self.rto = self.srtt + max(self.G, self.K * self.rttvar)
+    self.rto = max(self.rto, self.MIN_RTO)
+    self.rto = min(self.rto, self.MAX_RTO)
 
     ## End of Stage 9.1 ##
 
-    pass
 
 
   def handle_accepted_payload(self, payload):
@@ -744,15 +753,14 @@ class StudentUSocket(StudentUSocketBase):
 
 
     ## Start of Stage 8.2 ##
-    if not self.retx_queue.empty():
-      self.retx_queue.pop_upto(seq_no=seg.ack)
+    acked_pkt = self.retx_queue.pop_upto(seq_no=seg.ack)
 
     ## End of Stage 8.2 ##
 
 
     ## Start of Stage 9.2 ##
 
-    acked_pkts = [] # remove when implemented
+    acked_pkts = acked_pkt # remove when implemented
     for (ackno, p) in acked_pkts:
       if not p.retxed:
         self.update_rto(p)
@@ -937,6 +945,7 @@ class StudentUSocket(StudentUSocketBase):
       self.tx(p, retxed=True)
 
       ## Start of Stage 9.3 ##
+      self.rto = min(self.MAX_RTO, self.rto * 2)
 
       ## End of Stage 9.3 ##
 
