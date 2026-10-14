@@ -478,6 +478,7 @@ class StudentUSocket(StudentUSocketBase):
       self._delete_tcb()
     elif self.state is ESTABLISHED:
       ## Start of Stage 7.1 ##
+      self.fin_ctrl.set_pending(next_state=FIN_WAIT_1)
 
       ## End of Stage 7.1 ##
       pass
@@ -485,6 +486,7 @@ class StudentUSocket(StudentUSocketBase):
       raise RuntimeError("close() is invalid in FIN_WAIT states")
     elif self.state is CLOSE_WAIT:
       ## Start of Stage 6.2 ##
+      self.fin_ctrl.set_pending(next_state=LAST_ACK)
 
       ## End of Stage 6.2 ##
       pass
@@ -568,6 +570,8 @@ class StudentUSocket(StudentUSocketBase):
       seg = p.tcp
       snd_len = len(seg.payload)
       self.snd.nxt = self.snd.nxt |PLUS| snd_len
+      p.tx_ts = self.stack.now
+      self.retx_queue.push(p=p)
 
       ## End of Stage 4.4 ##
 
@@ -627,7 +631,8 @@ class StudentUSocket(StudentUSocketBase):
       smallest_seq_num, smallest_seq_packet = self.rx_queue.pop()
       data = smallest_seq_packet.app[self.rcv.nxt |MINUS| smallest_seq_num:]
       self.handle_accepted_seg(seg=smallest_seq_packet.tcp, payload=data)
-    self.set_pending_ack()
+    if payload:
+      self.set_pending_ack()
 
     ## End of Stage 3.2 ##
 
@@ -683,10 +688,19 @@ class StudentUSocket(StudentUSocketBase):
     """
 
     ## Start of Stage 9.1 ##
+    R = self.stack.now - acked_pkt.tx_ts
+    if self.srtt == 0:
+      self.srtt = R
+      self.rttvar = R / 2
+    else:
+      self.rttvar = (1-self.beta) * self.rttvar + self.beta *abs(self.srtt - R)
+      self.srtt = (1-self.alpha) * self.srtt + self.alpha * R
+    self.rto = self.srtt + max(self.G, self.K * self.rttvar)
+    self.rto = max(self.rto, self.MIN_RTO)
+    self.rto = min(self.rto, self.MAX_RTO)
 
     ## End of Stage 9.1 ##
 
-    pass
 
 
   def handle_accepted_payload(self, payload):
@@ -739,13 +753,14 @@ class StudentUSocket(StudentUSocketBase):
 
 
     ## Start of Stage 8.2 ##
+    acked_pkt = self.retx_queue.pop_upto(seq_no=seg.ack)
 
     ## End of Stage 8.2 ##
 
 
     ## Start of Stage 9.2 ##
 
-    acked_pkts = [] # remove when implemented
+    acked_pkts = acked_pkt # remove when implemented
     for (ackno, p) in acked_pkts:
       if not p.retxed:
         self.update_rto(p)
@@ -765,11 +780,27 @@ class StudentUSocket(StudentUSocketBase):
     self.log.info("Got FIN!")
 
     ## Start of Stage 6.1 ##
+    if self.state == ESTABLISHED:
+      self.rcv.nxt = self.rcv.nxt |PLUS| 1
+      self.set_pending_ack()
+      self.state = CLOSE_WAIT
 
     ## End of Stage 6.1 ##
 
 
     ## Start of Stage 7.2 ##
+    if seg.FIN:
+      if self.state == FIN_WAIT_1:
+        if seg.ACK:
+          self.set_pending_ack()
+          self.start_timer_timewait()
+        else:
+          self.set_pending_ack()
+          self.state = CLOSING
+      elif self.state == FIN_WAIT_2:
+        self.rcv.nxt = self.rcv.nxt |PLUS| 1
+        self.set_pending_ack()
+        self.start_timer_timewait()
 
     ## End of Stage 7.2 ##
 
@@ -801,14 +832,17 @@ class StudentUSocket(StudentUSocketBase):
     ## Start of Stage 6.3 ##
     ## Start of Stage 7.3 ##
     if self.state == FIN_WAIT_1:
-      pass
+      if self.fin_ctrl.acks_our_fin(ack=seg.ack):
+        self.state = FIN_WAIT_2
     elif self.state == FIN_WAIT_2:
       if self.retx_queue.empty():
         self.set_pending_ack()
     elif self.state == CLOSING:
-      pass
+      if self.fin_ctrl.acks_our_fin(ack=seg.ack):
+        self.start_timer_timewait()
     elif self.state == LAST_ACK:
-      pass
+      if self.fin_ctrl.acks_our_fin(ack=seg.ack):
+        self._delete_tcb()
     elif self.state == TIME_WAIT:
       # restart the 2 msl timeout
       self.set_pending_ack()
@@ -898,7 +932,11 @@ class StudentUSocket(StudentUSocketBase):
     """
 
     ## Start of Stage 8.3 ##
-    time_in_queue = 0 # modify when implemented
+    seq_pkt = self.retx_queue.get_earliest_pkt()
+    if seq_pkt == None:
+      return
+    p = seq_pkt[1]
+    time_in_queue = self.stack.now - p.tx_ts
 
     ## End of Stage 8.3 ##
 
@@ -907,6 +945,7 @@ class StudentUSocket(StudentUSocketBase):
       self.tx(p, retxed=True)
 
       ## Start of Stage 9.3 ##
+      self.rto = min(self.MAX_RTO, self.rto * 2)
 
       ## End of Stage 9.3 ##
 
